@@ -1,67 +1,101 @@
-{
-  "name": "@google-cloud/cloud-run-mcp",
-  "version": "1.8.0",
-  "type": "module",
-  "description": "Cloud Run MCP deployment tool",
-  "main": "mcp-server.js",
-  "bin": {
-    "cloud-run-mcp": "mcp-server.js"
-  },
-  "scripts": {
-    "deploy": "gcloud run deploy cloud-run-mcp --source . --no-invoker-iam-check",
-    "test:workflows": "node --test test/need-gcp/workflows/*.test.js",
-    "test:deploy": "node test/need-gcp/deployer.test.js",
-    "test:projects": "node test/need-gcp/gcp-projects.test.js",
-    "test:services": "node test/need-gcp/cloud-run-services.test.js",
-    "test:gcp-auth": "node test/need-gcp/gcp-auth-check.test.js",
-    "test:prompts": "node --test test/local/prompts.test.js",
-    "test:mcp": "node --test test/local/mcp-server.test.js",
-    "test:tools": "node --test test/local/tools.test.js",
-    "test:local": "node --test test/local/*.test.js test/local/**/*.test.js",
-    "test": "c8 --check-coverage npm run test:local",
-    "mcp-inspector": "npx @modelcontextprotocol/inspector node mcp-server.js",
-    "start": "node mcp-server.js",
-    "lint:check": "prettier --check .",
-    "lint": "prettier --write ."
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/GoogleCloudPlatform/cloud-run-mcp.git"
-  },
-  "keywords": [
-    "mcp",
-    "cloud-run",
-    "gcp"
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ResourceTemplate } from "@modelcontextprotocol/sdk/common/resource.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import express from "express";
+import { google } from 'googleapis';
+import { z } from "zod";
+
+// 1. Initialize the MCP Server
+const server = new McpServer({
+  name: "MasterWorkspaceAgent",
+  version: "1.0.0",
+});
+
+// 2. Resilient Google Auth (Uses Service Account automatically on Cloud Run)
+const auth = new google.auth.GoogleAuth({
+  scopes: [
+    'https://www.googleapis.com/auth/documents',
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/drive.readonly'
   ],
-  "author": "steren@google.com",
-  "license": "Apache-2.0",
-  "bugs": {
-    "url": "https://github.com/GoogleCloudPlatform/cloud-run-mcp/issues"
-  },
-  "homepage": "https://github.com/GoogleCloudPlatform/cloud-run-mcp#readme",
-  "dependencies": {
-    "@google-cloud/artifact-registry": "^4.0.1",
-    "@google-cloud/billing": "^5.0.1",
-    "@google-cloud/cloudbuild": "^5.0.1",
-    "@google-cloud/logging": "^11.2.0",
-    "@google-cloud/resource-manager": "^6.0.1",
-    "@google-cloud/run": "^3.1.0",
-    "@google-cloud/service-usage": "^4.1.0",
-    "@google-cloud/storage": "^7.16.0",
-    "@modelcontextprotocol/sdk": "^1.24.3",
-    "archiver": "^7.0.1",
-    "@dotenvx/dotenvx": "^1.52.0",
-    "express": "^5.1.0",
-    "google-proto-files": "^5.0.0",
-    "zod": "^3.25.76"
-    "@modelcontextprotocol/sdk": "^0.6.0",
-    "googleapis": "^144.0.0",
-    "express": "^4.19.0"
+});
+
+// --- TOOL: READ GOOGLE DOC (Aggregated Logic) ---
+server.tool(
+  "read_google_doc",
+  { documentId: z.string().describe("The ID of the Google Doc to read") },
+  async ({ documentId }) => {
+    try {
+      const docs = google.docs({ version: 'v1', auth });
+      const res = await docs.documents.get({ documentId });
+      let content = "";
+      res.data.body.content.forEach(item => {
+        if (item.paragraph) {
+          item.paragraph.elements.forEach(el => {
+            if (el.textRun) content += el.textRun.content;
+          });
+        }
+      });
+      return { content: [{ type: "text", text: content }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
     }
-  },
-  "devDependencies": {
-    "c8": "^10.1.3",
-    "esmock": "^2.7.1",
-    "prettier": "^3.8.0"
   }
-}
+);
+
+// --- TOOL: READ SHEETS (Aggregated Logic) ---
+server.tool(
+  "read_spreadsheet",
+  { 
+    spreadsheetId: z.string().describe("The ID of the spreadsheet"),
+    range: z.string().describe("The range to read (e.g. 'Sheet1!A1:D10')") 
+  },
+  async ({ spreadsheetId, range }) => {
+    try {
+      const sheets = google.sheets({ version: 'v4', auth });
+      const res = await sheets.spreadsheets.values.get({ spreadsheetId, range });
+      const rows = res.data.values;
+      return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
+    }
+  }
+);
+
+// --- TOOL: SEARCH DRIVE (Aggregated Logic) ---
+server.tool(
+  "search_drive",
+  { query: z.string().describe("Google Drive search query (e.g. 'name contains \"Invoice\"')") },
+  async ({ query }) => {
+    try {
+      const drive = google.drive({ version: 'v3', auth });
+      const res = await drive.files.list({ q: query, fields: 'files(id, name, mimeType)' });
+      return { content: [{ type: "text", text: JSON.stringify(res.data.files, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: `Error: ${error.message}` }], isError: true };
+    }
+  }
+);
+
+// 3. Set up the Cloud Run Express Server (SSE Transport)
+const app = express();
+let transport;
+
+app.get("/sse", async (req, res) => {
+  console.log("New SSE connection from device");
+  transport = new SSEServerTransport("/messages", res);
+  await server.connect(transport);
+});
+
+app.post("/messages", async (req, res) => {
+  if (transport) {
+    await transport.handlePostMessage(req, res);
+  } else {
+    res.status(400).send("No active SSE session");
+  }
+});
+
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
+  console.log(`Master Agent is live on port ${PORT}`);
+});
