@@ -1,0 +1,33 @@
+name: Deploy Master Agent to Cloud Run
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and Push Container
+        run: |
+          gcloud auth configure-docker us-central1-docker.pkg.dev
+          gcloud builds submit --tag us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/cloud-run-source-deploy/master-agent:latest
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy workspace-agent \
+            --image us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/cloud-run-source-deploy/master-agent:latest \
+            --region us-central1 \
+            --service-account=google-api-credentials@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+            --allow-unauthenticated
