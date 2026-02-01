@@ -100,6 +100,8 @@ server.tool(
   }
 );
 
+// ... existing code above ...
+
 // 3. SSE Endpoint for LobeChat to connect
 app.get("/sse", async (req, res) => {
   const transport = new SSEServerTransport("/messages", res);
@@ -110,7 +112,8 @@ app.post("/messages", async (req, res) => {
   await server.handleMessage(req, res);
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Master Agent listening on port ${PORT}`);
+// CRITICAL FIX: Use 0.0.0.0 and process.env.PORT for Cloud Run compatibility
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Master Agent listening on port ${PORT} at 0.0.0.0`);
 });
