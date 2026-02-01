@@ -1,20 +1,20 @@
 {
-  "name": "google-workspace-mcp",
+  "name": "google-workspace-mcp-server",
   "version": "1.0.0",
-  "description": "Master Google Workspace MCP Agent on Cloud Run",
-  "type": "module",
+  "description": "MCP server for Google Workspace",
   "main": "mcp-server.js",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "start": "node mcp-server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "node --watch mcp-server.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^0.6.0",
-    "express": "^4.19.0",
-    "googleapis": "^144.0.0",
-    "zod": "^3.23.0"
-  },
-  "engines": {
-    "node": ">=20.0.0"
+    "@modelcontextprotocol/sdk": "^1.0.1",
+    "express": "^4.18.2",
+    "googleapis": "^126.0.0",
+    "zod": "^3.22.4"
   }
 }
